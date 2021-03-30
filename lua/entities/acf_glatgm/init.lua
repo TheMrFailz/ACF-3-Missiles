@@ -66,7 +66,6 @@ function MakeACF_GLATGM(Gun, BulletData)
 	Entity.MaxRange     = BulletData.MuzzleVel * 2 * 39.37 / ACF.Scale -- optical fuze distance
 	Entity.KillTime     = ACF.CurTime + 20
 	Entity.GuideDelay   = ACF.CurTime + 2 -- Missile won't be guided for the first two seconds
-	Entity.LastThink    = ACF.CurTime
 	Entity.Filter       = Entity.BulletData.Filter
 	Entity.Agility      = 10 -- Magic multiplier that controls the agility of the missile
 	Entity.IsSubcaliber = Caliber < 100
@@ -191,7 +190,7 @@ function ENT:Think()
 	end
 
 	local IsGuided, Direction, Correction
-	local DeltaTime = ACF.CurTime - self.LastThink
+	local DeltaTime = ACF.DeltaTime
 	local IsDelayed = self.GuideDelay > Time
 	local Computer  = self:GetComputer()
 	local Position  = self.Position
@@ -251,8 +250,6 @@ function ENT:Think()
 
 	self:SetPos(self.Position)
 	self:NextThink(Time)
-
-	self.LastThink = Time
 
 	return true
 end

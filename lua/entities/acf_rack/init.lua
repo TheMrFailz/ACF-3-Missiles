@@ -823,16 +823,12 @@ do -- Misc -------------------------------------
 		self.Position = Current
 
 		if Previous then
-			local DeltaTime = Time - self.LastThink
-
-			self.Velocity = (Current - Previous) / DeltaTime
+			self.Velocity = (Current - Previous) / ACF.DeltaTime
 		else
 			self.Velocity = Vector()
 		end
 
 		self:NextThink(Time)
-
-		self.LastThink = Time
 
 		return true
 	end
