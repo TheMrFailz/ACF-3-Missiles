@@ -5,27 +5,48 @@ include("shared.lua")
 
 -- Local Vars -----------------------------------
 
-local EMPTY   = { Type = "Empty", PropMass = 0, ProjMass = 0, Tracer = 0 }
-local HookRun = hook.Run
-local ACF     = ACF
+local EMPTY     = { Type = "Empty", PropMass = 0, ProjMass = 0, Tracer = 0 }
+local HookRun   = hook.Run
+local ACF       = ACF
+local Classes   = ACF.Classes
+local Utilities = ACF.Utilities
+local Clock     = Utilities.Clock
 
 do -- Spawning and Updating --------------------
 	local UnlinkSound = "physics/metal/metal_box_impact_bullet%s.wav"
 	local MaxDistance = ACF.LinkDistance * ACF.LinkDistance
 	local CheckLegal  = ACF_CheckLegal
-	local Racks       = ACF.Classes.Racks
+	local WireIO      = Utilities.WireIO
+	local Entities    = Classes.Entities
+	local Racks       = Classes.Racks
+
+	local Inputs = {
+		"Fire (Attempts to fire the next missile in line, or the selected one.)",
+		"Reload (Attempts to load another missile into the rack.)",
+		"Unload (Does nothing.)",
+		"Missile Index (Selects a specific slot on the rack to be fired next.)",
+		"Fire Delay (Sets the delay at which missiles will be fired.)"
+	}
+	local Outputs = {
+		"Ready (Returns 1 if the rack can fire a missile.)",
+		"Status (Returns the current state of the rack.) [STRING]",
+		"Shots Left (Returns the amount of missiles left in the rack.)",
+		"Current Index (Returns the currently selected missile index.)",
+		"Missile (Returns the next missile to be fired.) [ENTITY]",
+		"Entity (The rack itself.) [ENTITY]"
+	}
 
 	local function VerifyData(Data)
 		if not Data.Rack then
 			Data.Rack = Data.Id or "1xRK"
 		end
 
-		local Rack = Racks[Data.Rack]
+		local Rack = Racks.Get(Data.Rack)
 
 		if not Rack then
 			Data.Rack = "1xRK"
 
-			Rack = Racks["1xRK"]
+			Rack = Racks.Get("1xRK")
 		end
 
 		do -- External verifications
@@ -34,38 +55,6 @@ do -- Spawning and Updating --------------------
 			end
 
 			HookRun("ACF_VerifyData", "acf_rack", Data, Rack)
-		end
-	end
-
-	local function CreateInputs(Entity, Data, Rack)
-		local List = { "Fire", "Reload", "Unload", "Missile Index", "Fire Delay" }
-
-		if Rack.SetupInputs then
-			Rack.SetupInputs(List, Entity, Data, Rack)
-		end
-
-		HookRun("ACF_OnSetupInputs", "acf_rack", List, Entity, Data, Rack)
-
-		if Entity.Inputs then
-			Entity.Inputs = WireLib.AdjustInputs(Entity, List)
-		else
-			Entity.Inputs = WireLib.CreateInputs(Entity, List)
-		end
-	end
-
-	local function CreateOutputs(Entity, Data, Rack)
-		local List = { "Ready", "Shots Left", "Current Index", "Status [STRING]", "Missile [ENTITY]", "Entity [ENTITY]" }
-
-		if Rack.SetupOutputs then
-			Rack.SetupOutputs(List, Entity, Data, Rack)
-		end
-
-		HookRun("ACF_OnSetupOutputs", "acf_rack", List, Entity, Data, Rack)
-
-		if Entity.Outputs then
-			Entity.Outputs = WireLib.AdjustOutputs(Entity, List)
-		else
-			Entity.Outputs = WireLib.CreateOutputs(Entity, List)
 		end
 	end
 
@@ -98,11 +87,12 @@ do -- Spawning and Updating --------------------
 		Entity.MissileModel   = Rack.RackModel
 		Entity.ReloadTime     = 1
 		Entity.CurrentShot    = 0
+		Entity.Spread         = Rack.Spread or 1
+
+		WireIO.SetupInputs(Entity, Inputs, Data, Rack)
+		WireIO.SetupOutputs(Entity, Outputs, Data, Rack)
 
 		Entity:SetNWString("WireName", "ACF " .. Entity.Name)
-
-		CreateInputs(Entity, Data, Rack)
-		CreateOutputs(Entity, Data, Rack)
 
 		ACF.Activate(Entity, true)
 
@@ -159,11 +149,11 @@ do -- Spawning and Updating --------------------
 		end
 	end
 
-	hook.Add("ACF_OnSetupInputs", "ACF Rack Motor Delay", function(EntClass, List, _, _, Rack)
-		if EntClass ~= "acf_rack" then return end
+	hook.Add("ACF_OnSetupInputs", "ACF Rack Motor Delay", function(Entity, List, _, Rack)
+		if Entity:GetClass() ~= "acf_rack" then return end
 		if Rack.EntType ~= "Rack" then return end
 
-		List[#List + 1] = "Motor Delay"
+		List[#List + 1] = "Motor Delay (A forced delay before igniting the thruster)"
 	end)
 
 	-------------------------------------------------------------------------------
@@ -171,7 +161,7 @@ do -- Spawning and Updating --------------------
 	function MakeACF_Rack(Player, Pos, Ang, Data)
 		VerifyData(Data)
 
-		local RackData = Racks[Data.Rack]
+		local RackData = Racks.Get(Data.Rack)
 		local Limit = RackData.LimitConVar.Name
 
 		if not Player:CheckLimit(Limit) then return end
@@ -197,7 +187,7 @@ do -- Spawning and Updating --------------------
 		Rack.MountPoints = {}
 		Rack.Missiles    = {}
 		Rack.Crates      = {}
-		Rack.DataStore   = ACF.GetEntityArguments("acf_rack")
+		Rack.DataStore   = Entities.GetArguments("acf_rack")
 
 		UpdateRack(Rack, Data, RackData)
 
@@ -230,7 +220,8 @@ do -- Spawning and Updating --------------------
 		return Rack
 	end
 
-	ACF.RegisterEntityClass("acf_rack", MakeACF_Rack, "Rack")
+	Entities.Register("acf_rack", MakeACF_Rack, "Rack")
+
 	ACF.RegisterLinkSource("acf_rack", "Crates")
 	ACF.RegisterLinkSource("acf_rack", "Computer", true)
 	ACF.RegisterLinkSource("acf_rack", "Radar", true)
@@ -300,8 +291,8 @@ do -- Custom ACF damage ------------------------
 		end)
 	end
 
-	function ENT:ACF_OnDamage(Energy, FrArea, Ang, Inflictor)
-		local HitRes = ACF.PropDamage(self, Energy, FrArea, Ang, Inflictor) --Calling the standard damage prop function
+	function ENT:ACF_OnDamage(Bullet, Trace)
+		local HitRes = ACF.PropDamage(Bullet, Trace) --Calling the standard damage prop function
 
 		if not HitRes.Kill then
 			local Ratio = self.ACF.Health / self.ACF.MaxHealth
@@ -445,7 +436,7 @@ do -- Entity Inputs ----------------------------
 		Entity.FireDelay = math.Clamp(Value, 0.1, 1)
 	end)
 
-	ACF.AddInputAction("acf_rack", "Launch Delay", function(Entity, Value)
+	ACF.AddInputAction("acf_rack", "Motor Delay", function(Entity, Value)
 		Entity.LaunchDelay = Value > 0 and math.min(Value, 1) or nil
 	end)
 end ---------------------------------------------
@@ -536,11 +527,11 @@ do -- Firing -----------------------------------
 end ---------------------------------------------
 
 do -- Loading ----------------------------------
-	local Missiles = ACF.Classes.Missiles
+	local Missiles  = Classes.Missiles
 	local NO_OFFSET = Vector()
 
 	local function GetMissileAngPos(BulletData, Point)
-		local Class    = ACF.GetClassGroup(Missiles, BulletData.Id)
+		local Class    = Classes.GetGroup(Missiles, BulletData.Id)
 		local Data     = Class and Class.Lookup[BulletData.Id]
 		local Offset   = Data and Data.Offset or NO_OFFSET
 		local Position = Point.Position
@@ -599,7 +590,7 @@ do -- Loading ----------------------------------
 			local Percent = math.max(0.5, (Bullet.ProjLength + Bullet.PropLength) / Missile.MaxLength)
 			local Time    = Missile.ReloadTime * Percent
 
-			Point.NextFire = ACF.CurTime + Time
+			Point.NextFire = Clock.CurTime + Time
 			Point.State    = "Loading"
 
 			self:UpdateLoad(Point, Missile)
@@ -816,7 +807,7 @@ do -- Misc -------------------------------------
 	end
 
 	function ENT:Think()
-		local Time     = ACF.CurTime
+		local Time     = Clock.CurTime
 		local Previous = self.Position
 		local Current  = GetPosition(self)
 

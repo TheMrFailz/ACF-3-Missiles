@@ -39,7 +39,6 @@ end)
 
 local Radars	  = ACF.ActiveRadars
 local CheckLegal  = ACF_CheckLegal
-local Sensors	  = ACF.Classes.Sensors
 local UnlinkSound = "physics/metal/metal_box_impact_bullet%s.wav"
 local MaxDistance = ACF.LinkDistance * ACF.LinkDistance
 local TraceData	  = { start = true, endpos = true, mask = MASK_SOLID_BRUSHONLY }
@@ -182,7 +181,8 @@ local function ScanForEntities(Entity)
 				Owner = Owner,
 				Position = EntPos,
 				Velocity = EntVel,
-				Distance = EntDist
+				Distance = EntDist,
+				Spread   = Spread,
 			}
 
 			IDs[Count] = Index
@@ -283,17 +283,36 @@ end)
 --===============================================================================================--
 
 do -- Spawn and Update functions
+	local Classes  = ACF.Classes
+	local WireIO   = ACF.Utilities.WireIO
+	local Entities = Classes.Entities
+	local Sensors  = Classes.Sensors
+	local Inputs   = { "Active (If set to a non-zero value, attempts to start the radar activation.)" }
+
+	local Outputs = {
+		"Scanning (Returns 1 if the radar is currently scanning.)",
+		"Detected (Returns the amount of targets detected by the radar.)",
+		"ClosestDistance (Returns the distance in inches of the closest target detected by the radar.)",
+		"IDs (Returns a list of IDs from all the detected targets.) [ARRAY]",
+		"Owner (Returns a list of owner names from all the detected targets.) [ARRAY]",
+		"Position (Returns a list of position vectors from all the detected targets.) [ARRAY]",
+		"Velocity (Returns a list of velocity vectors from all the detected targets.) [ARRAY]",
+		"Distance (Returns a list of distances from all the detected targets.) [ARRAY]",
+		"Think Delay (Returns the amount of time in seconds between each scan.)",
+		"Entity (The radar itself.) [ENTITY]"
+	}
+
 	local function VerifyData(Data)
 		if not Data.Radar then
 			Data.Radar = Data.Sensor or Data.Id
 		end
 
-		local Class = ACF.GetClassGroup(Sensors, Data.Radar)
+		local Class = Classes.GetGroup(Sensors, Data.Radar)
 
 		if not Class or Class.Entity ~= "acf_radar" then
 			Data.Radar = "SmallDIR-TGT"
 
-			Class = ACF.GetClassGroup(Sensors, "SmallDIR-TGT")
+			Class = Classes.GetGroup(Sensors, "SmallDIR-TGT")
 		end
 
 		do -- External verifications
@@ -305,39 +324,10 @@ do -- Spawn and Update functions
 		end
 	end
 
-	local function CreateInputs(Entity, Data, Class, Radar)
-		local List = { "Active" }
-
-		if Class.SetupInputs then
-			Class.SetupInputs(List, Entity, Data, Class, Radar)
-		end
-
-		HookRun("ACF_OnSetupInputs", "acf_radar", List, Entity, Data, Class, Radar)
-
-		if Entity.Inputs then
-			Entity.Inputs = WireLib.AdjustInputs(Entity, List)
-		else
-			Entity.Inputs = WireLib.CreateInputs(Entity, List)
-		end
-	end
-
-	local function CreateOutputs(Entity, Data, Class, Radar)
-		local List = { "Think Delay", "Scanning", "Detected", "ClosestDistance", "IDs [ARRAY]", "Owner [ARRAY]", "Position [ARRAY]", "Velocity [ARRAY]", "Distance [ARRAY]", "Entity [ENTITY]" }
-
-		if Class.SetupOutputs then
-			Class.SetupOutputs(List, Entity, Data, Class, Radar)
-		end
-
-		HookRun("ACF_OnSetupOutputs", "acf_radar", List, Entity, Data, Class, Radar)
-
-		if Entity.Outputs then
-			Entity.Outputs = WireLib.AdjustOutputs(Entity, List)
-		else
-			Entity.Outputs = WireLib.CreateOutputs(Entity, List)
-		end
-	end
-
 	local function UpdateRadar(Entity, Data, Class, Radar)
+		local Tick  = engine.TickInterval()
+		local Delay = Radar.ThinkDelay
+
 		Entity.ACF = Entity.ACF or {}
 		Entity.ACF.Model = Radar.Model -- Must be set before changing model
 
@@ -359,19 +349,19 @@ do -- Spawn and Update functions
 		Entity.EntType      = Class.Name
 		Entity.ClassType    = Class.ID
 		Entity.ClassData    = Class
-		Entity.SoundPath    = Class.Sound or ACFM.DefaultRadarSound
+		Entity.SoundPath    = Class.Sound or ACF.DefaultRadarSound
 		Entity.DefaultSound = Entity.SoundPath
 		Entity.ConeDegs     = Radar.ViewCone
 		Entity.Range        = Radar.Range
 		Entity.SwitchDelay  = Radar.SwitchDelay
-		Entity.ThinkDelay   = Radar.ThinkDelay
+		Entity.ThinkDelay   = math.Round(Delay / Tick) * Tick -- Uses a timer, so has to be tied to CurTime/tickrate
 		Entity.GetDetected  = Radar.Detect or Class.Detect
 		Entity.Origin       = AttachData and Entity:WorldToLocal(AttachData.Pos) or Vector()
 
-		Entity:SetNWString("WireName", "ACF " .. Entity.Name)
+		WireIO.SetupInputs(Entity, Inputs, Data, Class, Radar)
+		WireIO.SetupOutputs(Entity, Outputs, Data, Class, Radar)
 
-		CreateInputs(Entity, Data, Class, Radar)
-		CreateOutputs(Entity, Data, Class, Radar)
+		Entity:SetNWString("WireName", "ACF " .. Entity.Name)
 
 		WireLib.TriggerOutput(Entity, "Think Delay", Entity.ThinkDelay)
 
@@ -387,7 +377,7 @@ do -- Spawn and Update functions
 	function MakeACF_Radar(Player, Pos, Angle, Data)
 		VerifyData(Data)
 
-		local Class = ACF.GetClassGroup(Sensors, Data.Radar)
+		local Class = Classes.GetGroup(Sensors, Data.Radar)
 		local RadarData = Class.Lookup[Data.Radar]
 		local Limit = Class.LimitConVar.Name
 
@@ -412,7 +402,7 @@ do -- Spawn and Update functions
 		Radar.Spread      = 0
 		Radar.Weapons     = {}
 		Radar.Targets     = {}
-		Radar.DataStore   = ACF.GetEntityArguments("acf_radar")
+		Radar.DataStore   = Entities.GetArguments("acf_radar")
 		Radar.TargetInfo  = {
 			ID = {},
 			Owner = {},
@@ -452,8 +442,9 @@ do -- Spawn and Update functions
 		return Radar
 	end
 
-	ACF.RegisterEntityClass("acf_missileradar", MakeACF_Radar, "Radar") -- Backwards compatibility
-	ACF.RegisterEntityClass("acf_radar", MakeACF_Radar, "Radar")
+	Entities.Register("acf_missileradar", MakeACF_Radar, "Radar") -- Backwards compatibility
+	Entities.Register("acf_radar", MakeACF_Radar, "Radar")
+
 	ACF.RegisterLinkSource("acf_radar", "Weapons")
 
 	------------------- Updating ---------------------
@@ -463,7 +454,7 @@ do -- Spawn and Update functions
 
 		VerifyData(Data)
 
-		local Class    = ACF.GetClassGroup(Sensors, Data.Radar)
+		local Class    = Classes.GetGroup(Sensors, Data.Radar)
 		local Radar    = Class.Lookup[Data.Radar]
 		local OldClass = self.ClassData
 
@@ -499,8 +490,8 @@ end
 -- Meta Funcs
 --===============================================================================================--
 
-function ENT:ACF_OnDamage(Energy, FrArea, Angle, Inflictor)
-	local HitRes = ACF.PropDamage(self, Energy, FrArea, Angle, Inflictor)
+function ENT:ACF_OnDamage(Bullet, Trace)
+	local HitRes = ACF.PropDamage(Bullet, Trace)
 
 	self.Spread = ACF.MaxDamageInaccuracy * (1 - math.Round(self.ACF.Health / self.ACF.MaxHealth, 2))
 
